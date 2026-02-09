@@ -16,6 +16,7 @@ L’output viene salvato in un file Excel denominato
 ``piano_campionatura.xlsx`` nella stessa cartella di lavoro.
 
 Usage:
+    python sap_sampling.py
     python sap_sampling.py ZSD032.xlsx ZPP04.xlsx
 
 Sono necessari i pacchetti ``pandas`` e ``openpyxl``.  Per
@@ -27,6 +28,43 @@ nella sezione ``if __name__ == '__main__'``).
 import sys
 from pathlib import Path
 import pandas as pd
+
+
+EXPECTED_COLUMNS_ZSD032 = {
+    'Destinatario merci',
+    'Materiale',
+    'Descrizione',
+    'Requested Date',
+    'Qtà da Spedire',
+}
+EXPECTED_COLUMNS_ZPP04 = {
+    'Materiale',
+    'Plant-Specific Material Status',
+    'T.m.',
+}
+
+
+def _validate_columns(df: pd.DataFrame, expected: set[str], label: str) -> None:
+    missing = sorted(expected.difference(df.columns))
+    if missing:
+        missing_str = ', '.join(missing)
+        raise ValueError(
+            f'Nel file {label} mancano le colonne attese: {missing_str}.'
+        )
+
+
+def _find_input_file(input_dir: Path, token: str) -> Path | None:
+    matches = [path for path in input_dir.glob('*.xlsx') if token.upper() in path.name.upper()]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _prompt_for_path(label: str) -> Path:
+    user_input = input(
+        f'Inserisci il percorso completo del file {label} (xlsx): '
+    ).strip()
+    return Path(user_input)
 
 
 def genera_piano_campionatura(path_zsd032: Path, path_zpp04: Path) -> pd.DataFrame:
@@ -46,18 +84,23 @@ def genera_piano_campionatura(path_zsd032: Path, path_zpp04: Path) -> pd.DataFra
         DataFrame con le colonne: ``Destinatario merci``, ``Materiale``,
         ``Descrizione``, ``Requested Date``, ``Qtà da Spedire``, ``is_kit``.
     """
+    print(f'[INFO] File ZSD032: {path_zsd032}')
+    print(f'[INFO] File ZPP04: {path_zpp04}')
+
     # Carica l'estrazione ordini (ZSD032). La prima (e unica) sheet è "Data".
     ordini = pd.read_excel(path_zsd032, sheet_name=0)
+    print(f'[INFO] Righe lette ZSD032: {len(ordini)}')
 
     # Carica l'estrazione materiali (ZPP04).
     materiali = pd.read_excel(path_zpp04, sheet_name=0)
+    print(f'[INFO] Righe lette ZPP04: {len(materiali)}')
+
+    _validate_columns(ordini, EXPECTED_COLUMNS_ZSD032, 'ZSD032')
+    _validate_columns(materiali, EXPECTED_COLUMNS_ZPP04, 'ZPP04')
 
     # Seleziona solo i materiali con stato A6 (nuovi prodotti).
-    if 'Plant-Specific Material Status' not in materiali.columns:
-        raise KeyError(
-            "Colonna 'Plant-Specific Material Status' mancante nel file ZPP04."
-        )
     materiali_a6 = materiali[materiali['Plant-Specific Material Status'] == 'A6'].copy()
+    print(f'[INFO] Materiali con stato A6: {len(materiali_a6)}')
     # Crea un campo stringa per unire sulla colonna Materiale.  In alcuni
     # sistemi il campo potrebbe essere trattato come numerico o stringa; per
     # evitare problemi convertiamo entrambi a stringa senza zeri iniziali.
@@ -104,7 +147,9 @@ def genera_piano_campionatura(path_zsd032: Path, path_zpp04: Path) -> pd.DataFra
 
     # Ordina il piano per cliente (destinatario merci) e data di consegna.
     piano = piano.sort_values(['Destinatario merci', 'Requested Date'])
-    return piano.reset_index(drop=True)
+    piano = piano.reset_index(drop=True)
+    print(f'[INFO] Righe output: {len(piano)}')
+    return piano
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -115,13 +160,27 @@ def main(argv: list[str] | None = None) -> None:
     ``piano_campionatura.xlsx``.
     """
     argv = argv or sys.argv[1:]
-    if len(argv) != 2:
+    input_dir = Path('INPUT')
+    output_dir = Path('OUTPUT')
+    input_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if len(argv) == 2:
+        path_zsd, path_zpp = map(Path, argv)
+    elif len(argv) == 0:
+        path_zsd = _find_input_file(input_dir, 'ZSD032')
+        path_zpp = _find_input_file(input_dir, 'ZPP04')
+        if path_zsd is None:
+            path_zsd = _prompt_for_path('ZSD032')
+        if path_zpp is None:
+            path_zpp = _prompt_for_path('ZPP04')
+    else:
         print(
-            'Uso: python sap_sampling.py <path_ZSD032.xlsx> <path_ZPP04.xlsx>',
+            'Uso: python sap_sampling.py [path_ZSD032.xlsx path_ZPP04.xlsx]',
             file=sys.stderr,
         )
         sys.exit(1)
-    path_zsd, path_zpp = map(Path, argv)
+
     if not path_zsd.exists():
         raise FileNotFoundError(f'File ZSD032 non trovato: {path_zsd}')
     if not path_zpp.exists():
@@ -130,9 +189,9 @@ def main(argv: list[str] | None = None) -> None:
     piano_df = genera_piano_campionatura(path_zsd, path_zpp)
     # Scrive su disco l'output come file Excel.  Utilizziamo
     # l'estensione xlsx e la libreria openpyxl.
-    output_path = path_zsd.parent / 'piano_campionatura.xlsx'
+    output_path = output_dir / 'piano_campionatura.xlsx'
     piano_df.to_excel(output_path, index=False)
-    print(f'Piano campionatura salvato in {output_path}')
+    print(f'[INFO] Piano campionatura salvato in {output_path}')
 
 
 if __name__ == '__main__':
