@@ -1,0 +1,7 @@
+*.xlsx
+
+INPUT/*
+!INPUT/.gitkeep
+
+OUTPUT/*
+!OUTPUT/.gitkeep
